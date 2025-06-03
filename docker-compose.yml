@@ -1,0 +1,153 @@
+version: "3.8"
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: postgres
+    depends_on:
+      - meta
+
+  kong:
+    container_name: supabase-kong
+    image: kong:2.8.1
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8443:8443"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+    volumes:
+      - ./volumes/kong:/var/lib/kong
+
+  auth:
+    container_name: supabase-auth
+    image: supabase/gotrue:v2.132.3
+    restart: unless-stopped
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: http://localhost:8000
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_HOST: db
+      GOTRUE_DB_PORT: 5432
+      GOTRUE_DB_NAME: postgres
+      GOTRUE_DB_USER: postgres
+      GOTRUE_DB_PASSWORD: postgres
+      GOTRUE_JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_SMS_AUTOCONFIRM: "true"
+      GOTRUE_SMS_PROVIDER: twilio
+      GOTRUE_MAILER_URLPATHS_INVITE: http://localhost:3000/invite
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: http://localhost:3000/confirm
+      GOTRUE_MAILER_URLPATHS_RECOVERY: http://localhost:3000/recover
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: http://localhost:3000/email-change
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "false"
+      GOTRUE_SMS_ENABLED: "false"
+      GOTRUE_DISABLE_SIGNUP: "false"
+    depends_on:
+      - db
+      - kong
+
+  rest:
+    container_name: supabase-rest
+    image: postgrest/postgrest:v11.2.0
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://postgres:postgres@db:5432/postgres
+      PGRST_DB_SCHEMA: public,storage
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    depends_on:
+      - db
+
+  realtime:
+    container_name: supabase-realtime
+    image: supabase/realtime:v2.25.22
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      PORT: 4000
+      JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters
+      REPLICATION_MODE: RLS
+      REPLICATION_POLL_INTERVAL: 100
+      SECURE_CHANNELS: "true"
+      SLOT_NAME: supabase_realtime_rls
+    depends_on:
+      - db
+
+  storage:
+    container_name: supabase-storage
+    image: supabase/storage-api:v0.40.4
+    restart: unless-stopped
+    environment:
+      ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UiLAogICAgImlhdCI6IDE2OTk5Mjg4MDAsCiAgICAiZXhwIjogMTg1Nzc5NDgwMAp9.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE
+      SERVICE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZSIsCiAgICAiaWF0IjogMTY5OTkyODgwMCwKICAgICJleHAiOiAxODU3Nzk0ODAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters
+      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
+      PGOPTIONS: "-c search_path=storage"
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: default
+      REGION: local
+      GLOBAL_S3_BUCKET: local
+      ENABLE_IMAGE_TRANSFORMATION: "true"
+      IMGPROXY_URL: http://imgproxy:5001
+    volumes:
+      - ./volumes/storage:/var/lib/storage
+    depends_on:
+      - db
+      - rest
+      - imgproxy
+
+  imgproxy:
+    container_name: supabase-imgproxy
+    image: darthsim/imgproxy:latest
+    restart: unless-stopped
+    environment:
+      IMGPROXY_BIND: :5001
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: /var/lib/storage
+    volumes:
+      - ./volumes/storage:/var/lib/storage:ro
+
+  meta:
+    container_name: supabase-meta
+    image: supabase/postgres-meta:v0.68.0
+    restart: unless-stopped
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PASSWORD: postgres
+    depends_on:
+      - db
+
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:15.1.0.117
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters
+      POSTGRES_DB: postgres
+    volumes:
+      - ./volumes/db:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d 
